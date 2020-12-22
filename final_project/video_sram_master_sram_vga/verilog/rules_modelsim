@@ -1,0 +1,409 @@
+`timescale 1ns/1ns
+
+//rules for dragon curve
+module dragon(clk, reset, dragon_prev, dragon_result, dragon_done);		//equivalent to applyRule_DragonCurve
+	input clk, reset;
+	input [7:0] dragon_prev; //8 bit input, ascii defined
+	output [39:0] dragon_result; //40 bit output
+	output [1:0] dragon_done;
+
+	reg [7:0] dragon_prev_reg;
+	reg [1:0] dragon_done_reg;
+	reg [39:0] dragon_result_reg;
+	
+	assign dragon_result = dragon_result_reg;
+	assign dragon_done = dragon_done_reg;
+	
+	//ascii definitions
+	localparam [7:0] X = 8'b01011000;
+	localparam [7:0] Y = 8'b01011001;
+	localparam [7:0] plus = 8'd43;		//+
+	localparam [7:0] minus = 8'd45;		//-
+	localparam [7:0] F = 8'd70;
+	localparam [7:0] open_bracket = 8'd91;	//[
+	localparam [7:0] closing_bracket = 8'd93;	//]
+
+	always @ (posedge clk) begin
+		if (reset) begin
+			dragon_result_reg <= 40'b0;
+			dragon_done_reg <= 3'b0;
+			dragon_prev_reg <= dragon_prev;
+		end
+		else begin
+			case (dragon_prev_reg)
+				X: begin
+					dragon_done_reg <= 2'b1;
+					dragon_result_reg <= {X, plus, Y, F, plus};	//"X+YF+"
+				end
+
+				Y: begin	
+					dragon_done_reg <= 2'd2;
+					dragon_result_reg <= {minus, F, X, minus, Y};	//"-FX-Y"
+				end
+	
+				default: begin
+					dragon_done_reg <= 2'd3;
+					dragon_result_reg <= {32'b0, dragon_prev_reg};
+				end
+			endcase
+		end
+	end
+
+endmodule
+
+module process_string(clk, reset, process_input_string, l_system, process_done, process_output_string); //equivalent to processString_DragonCurve
+	input clk, reset, l_system;
+	input [15:0] process_input_string; //2 characters
+	output [79:0] process_output_string; //10 characters
+	output process_done;
+
+	//localparam RESET_PROCESS 	= 4'b0;
+	localparam COMPUTE_PROCESS 	= 4'd1;
+	localparam UPDATE_PROCESS	= 4'd2;
+	localparam SHIFT_PROCESS 	= 4'd3;
+	localparam DONE_PROCESS 	= 4'd4;
+
+	reg [3:0] state_reg;
+	reg [15:0] process_input_string_reg;
+	reg [79:0] process_output_string_reg;
+	reg [7:0] output_counter;
+	reg process_done_reg;
+	
+	wire [39:0] dragon_result;
+	wire [1:0] dragon_done;
+	
+	assign process_output_string = process_output_string_reg;
+	assign process_done = process_done_reg;
+
+	dragon rule(
+		.clk	(clk),
+		.reset	(reset),
+		.dragon_prev	(process_input_string_reg[15:8]),
+		.dragon_result	(dragon_result),
+		.dragon_done	(dragon_done)
+	);
+
+	always @(posedge clk) begin
+		if (reset) begin
+			state_reg <= COMPUTE_PROCESS;
+			process_input_string_reg <= process_input_string;
+			process_output_string_reg <= 80'b0;
+			output_counter <= 80'd79;
+			process_done_reg <= 1'b0;
+		end	
+		else begin
+			case (state_reg)
+				//RESET_PROCESS: begin
+				//end
+				COMPUTE_PROCESS: begin
+					process_done_reg <= 1'b0;
+					if (process_input_string_reg == 16'b0) begin
+						state_reg <= DONE_PROCESS;
+					end
+					else begin
+						state_reg <= UPDATE_PROCESS;
+					end
+				end
+				UPDATE_PROCESS: begin
+					process_done_reg <= 1'b0;
+ 					//output_string_reg[output_counter:output_counter-output_counter - 8'd39] <= result;
+					process_output_string_reg[79:40] = (output_counter == 80'd79) ? dragon_result : process_output_string_reg[79:40];
+					process_output_string_reg[39:0] = (output_counter == 80'd39) ? dragon_result : process_output_string_reg[39:0];
+					state_reg <= SHIFT_PROCESS;
+					output_counter <= output_counter - 8'd40;
+				end
+			
+				SHIFT_PROCESS: begin
+					process_done_reg <= 1'b0;
+					process_input_string_reg <= process_input_string_reg << 8;
+					state_reg <= COMPUTE_PROCESS;
+					//output_counter <= output_counter - 8'd40;
+				end
+			
+				DONE_PROCESS: begin
+					process_done_reg <= 1'b1;
+				end
+				default: begin
+					state_reg <= COMPUTE_PROCESS;
+					process_input_string_reg <= process_input_string;
+					process_output_string_reg <= 80'b0;
+					output_counter <= 80'd79;
+					process_done_reg <= 1'b0;
+				end
+			endcase
+		end
+	end
+endmodule
+
+/*
+	char* createSystem_DragonCurve(int numIters, char* axiom) {
+	char start[1000000];
+	strcpy(start, axiom);
+	char end[1000000];
+	*end = "";
+	int i = 0;
+	char *check;
+	for (i = 0; i < numIters; i++) {
+		check = processString_DragonCurve(start);
+		*start = end;
+	}
+	return start;
+}
+
+module create_system(clk, reset, iterations, system_input_string, system_output_string, system_done); //equivalent to createSystem() in translated_python.c
+	input clk, reset;
+	input [15:0] system_input_string;
+	input [3:0] iterations;
+	output [79:0] system_output_string;
+	output system_done;
+	
+	localparam RESET_SYSTEM 	= 4'd0;
+	localparam COMPUTE_SYSTEM	= 4'd1;		//waiting for result from process string while iterations_counter > 0
+	localparam UPDATE_SYSTEM	= 4'd2;		//updating relevatn regs for the next iteration
+	localparam DONE_SYSTEM		= 4'd3;		//done
+
+	reg [3:0] state_reg;
+	reg [15:0] system_input_string_reg;
+	reg [7:0] output_counter;
+	reg [3:0] iterations_counter;
+	reg system_done_reg;
+
+	//wire done_process;
+	wire [79:0] process_result;
+	reg [79:0] process_result_reg;
+	wire process_done;
+	process_string process(
+		.clk			(clk), 
+		.reset			(reset), 
+		.process_input_string	((iterations_counter == iterations) ? system_input_string : process_result_reg[15:0]),  //input_string_reg
+		.l_system		(1'b0), 	//0 for dragon, 1 for plant
+		.process_done		(process_done), 
+		.process_output_string	(process_result)
+	);
+
+	assign system_output_string = process_result_reg;
+	assign system_done = system_done_reg;
+
+	always @ (posedge clk) begin
+		if (reset) begin
+			state_reg <= COMPUTE_SYSTEM;
+			process_result_reg <= 80'b0;
+			system_done_reg <= 1'b0;
+			iterations_counter <= iterations;
+		end
+		else begin
+			case (state_reg)
+				//RESET_SYSTEM: begin
+				//end
+				COMPUTE_SYSTEM: begin
+					system_done_reg <= 1'b0;
+					if (process_done == 1'b0) begin
+						state_reg <= COMPUTE_SYSTEM;
+					end
+					else begin
+						state_reg <= UPDATE_SYSTEM;
+					end	
+					if (iterations_counter <= 4'b0) begin
+						state_reg <= DONE_SYSTEM;
+					end
+				end
+				UPDATE_SYSTEM: begin
+					system_done_reg <= 1'b0;
+					iterations_counter <= iterations_counter - 4'b1;
+					state_reg <= COMPUTE_SYSTEM;
+					process_result_reg <= process_result;
+				end
+				DONE_SYSTEM: begin
+					system_done_reg <= 1'b1;
+				end
+				default: begin
+					state_reg <= COMPUTE_SYSTEM;
+					process_result_reg <= 80'b0;
+					system_done_reg <= 1'b0;
+					iterations_counter <= iterations;
+				end
+			endcase
+		end
+	end
+endmodule
+*/
+
+module create_system(clk, reset, iterations, system_input_string, system_output_string, system_done); //equivalent to createSystem() in translated_python.c
+	input clk, reset;
+	input [15:0] system_input_string;
+	input [3:0] iterations;
+	output [79:0] system_output_string;
+	output system_done;
+	
+	localparam RESET_SYSTEM 	= 4'd0;
+	localparam COMPUTE_SYSTEM	= 4'd1;		//waiting for result from process string while iterations_counter > 0
+	localparam UPDATE_SYSTEM	= 4'd2;		//updating relevatn regs for the next iteration
+	localparam SHIFT_SYSTEM		= 4'd3;
+	localparam DONE_SYSTEM		= 4'd4;		//done
+
+	localparam [7:0] X = 8'b01011000;
+	localparam [7:0] Y = 8'b01011001;
+	localparam [7:0] plus = 8'd43;		//+
+	localparam [7:0] minus = 8'd45;		//-
+	localparam [7:0] F = 8'd70;
+	localparam [7:0] open_bracket = 8'd91;	//[
+	localparam [7:0] closing_bracket = 8'd93;	//]
+
+	reg [3:0] state_reg;
+	reg [79:0] system_output_string_reg;
+	reg [7:0] output_counter;
+	reg [3:0] iterations_counter;
+	reg system_done_reg;
+
+	reg [15:0] process_input_string_reg;
+	wire [79:0] process_result;
+	reg [79:0] process_result_reg;
+	wire process_done;
+	process_string process(
+		.clk			(clk), 
+		.reset			(reset), 
+		.process_input_string	({X,Y}),//process_input_string_reg),
+		.l_system		(1'b0), 	//0 for dragon, 1 for plant
+		.process_done		(process_done), 
+		.process_output_string	(process_result)
+	);
+
+	assign system_output_string = system_output_string_reg;
+	assign system_done = system_done_reg;
+
+	always @ (posedge clk) begin
+		if (reset) begin
+			process_input_string_reg <= system_input_string;
+			iterations_counter <= 4'b0;
+			system_done_reg <= 1'b0;
+			system_output_string_reg <= 80'b0;
+			process_result_reg <= 80'b0;
+			state_reg <= COMPUTE_SYSTEM;
+		end
+		else begin
+			case (state_reg)
+				COMPUTE_SYSTEM: begin
+					system_done_reg <= 1'b0;
+					process_input_string_reg <= process_input_string_reg;
+					if (process_done) begin
+						state_reg <= UPDATE_SYSTEM;
+					end
+					else begin
+						state_reg <= COMPUTE_SYSTEM;
+					end
+					if (iterations_counter >= iterations) begin
+						state_reg <= DONE_SYSTEM;
+					end
+				end
+				UPDATE_SYSTEM: begin
+					system_done_reg <= 1'b0;
+					process_input_string_reg <= process_input_string_reg;
+					process_result_reg <= process_result;
+					system_output_string_reg <= process_result_reg;
+					state_reg <= SHIFT_SYSTEM;
+				end
+				SHIFT_SYSTEM: begin
+					system_done_reg <= 1'b0;
+					iterations_counter <= iterations_counter + 4'b1;
+					process_input_string_reg <= process_result_reg[15:0];
+					state_reg <= COMPUTE_SYSTEM;
+				end
+				DONE_SYSTEM: begin
+					system_done_reg <= 1'b1;
+				end
+				default: begin
+					process_input_string_reg <= system_input_string;
+					iterations_counter <= 4'b0;
+					system_done_reg <= 1'b0;
+					system_output_string_reg <= 80'b0;
+					process_result_reg <= 80'b0;
+					state_reg <= COMPUTE_SYSTEM;
+				end
+			endcase
+		end
+	end
+endmodule
+
+module testbench();
+	localparam [7:0] X = 8'b01011000;
+	localparam [7:0] Y = 8'b01011001;
+	localparam [7:0] plus = 8'd43;		//+
+	localparam [7:0] minus = 8'd45;		//-
+	localparam [7:0] F = 8'd70;
+	localparam [7:0] open_bracket = 8'd91;	//[
+	localparam [7:0] closing_bracket = 8'd93;	//]
+	reg clk_50, clk_25, reset;
+	
+	reg [31:0] index;
+	wire signed [15:0]  testbench_out;
+	
+	//Initialize clocks and index
+	initial begin
+		clk_50 = 1'b0;
+		clk_25 = 1'b0;
+		index  = 32'd0;
+		//testbench_out = 15'd0 ;
+	end
+	
+	//Toggle the clocks
+	always begin
+		#10
+		clk_50  = !clk_50;
+	end
+	
+	always begin
+		#20
+		clk_25  = !clk_25;
+	end
+	
+	//Intialize and drive signals
+	initial begin
+		reset  = 1'b0;
+		#10 
+		reset  = 1'b1;
+		#30
+		reset  = 1'b0;
+	end
+	
+	//Increment index
+	always @ (posedge clk_50) begin
+		index  <= index + 32'd1;
+	end
+
+	wire [79:0] system_output_string;
+	wire system_done;
+	create_system l_system(
+		.clk			(clk_50), 
+		.reset			(reset), 
+		.iterations		(4'd4), 
+		.system_input_string	({X,Y}), 
+		.system_output_string	(system_output_string), 
+		.system_done		(system_done)
+	);
+
+	/*
+	wire [39:0] dragon_result;
+	wire dragon_done;
+	dragon test(
+		.clk			(clk_50), 
+		.reset			(reset), 
+		.dragon_prev		(X), 
+		.dragon_result		(dragon_result), 
+		.dragon_done		(dragon_done)
+	);
+
+	wire process_done;
+	wire [79:0] process_output_string;
+	process_string process(
+		.clk			(clk_50), 
+		.reset			(reset), 
+		.process_input_string	({X,Y}), 
+		.l_system		(1'b0), 
+		.process_done		(process_done), 
+		.process_output_string	(process_output_string)
+	);
+	*/
+
+endmodule
+	
+
